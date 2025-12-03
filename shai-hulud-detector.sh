@@ -115,6 +115,10 @@ else
     HAS_RIPGREP=false
 fi
 
+# Git grep mode flag - set via --use-git-grep for systems without ripgrep
+# git grep uses a DFA-based regex engine (no backtracking) like ripgrep
+USE_GIT_GREP=false
+
 # Known malicious file hashed (source: https://socket.dev/blog/ongoing-supply-chain-attack-targets-crowdstrike-npm-packages)
 MALICIOUS_HASHLIST=(
     "de0e25a3e6c1e1e5998b306b7141b3dc4c0088da9d7bb47c1c00c91e6e4f85d6"
@@ -369,16 +373,23 @@ get_cached_package_dependencies() {
 # Modifies: None
 # Returns: Exits with code 1
 usage() {
-    echo "Usage: $0 [--paranoid] [--parallelism N] <directory_to_scan>"
+    echo "Usage: $0 [--paranoid] [--parallelism N] [--save-log FILE] [--use-git-grep] <directory_to_scan>"
     echo
     echo "OPTIONS:"
     echo "  --paranoid         Enable additional security checks (typosquatting, network patterns)"
     echo "                     These are general security features, not specific to Shai-Hulud"
     echo "  --parallelism N    Set the number of threads to use for parallelized steps (current: ${PARALLELISM})"
+    echo "  --save-log FILE    Save all detected file paths to FILE, grouped by severity"
+    echo "                     Output format: # HIGH / # MEDIUM / # LOW headers with file paths"
+    echo "  --use-git-grep     Use git grep instead of grep for pattern matching (experimental)"
+    echo "                     Fallback for systems without ripgrep that experience grep hangs"
+    echo "                     git grep uses a DFA-based regex engine (no backtracking)"
     echo ""
     echo "EXAMPLES:"
     echo "  $0 /path/to/your/project                    # Core Shai-Hulud detection only"
     echo "  $0 --paranoid /path/to/your/project         # Core + advanced security checks"
+    echo "  $0 --save-log report.log /path/to/project   # Save findings to file"
+    echo "  $0 --use-git-grep /path/to/your/project     # Use git grep if grep hangs"
     exit 1
 }
 
@@ -406,7 +417,11 @@ print_status() {
 # Note: Uses null-delimited input to handle filenames with spaces (issue #92)
 fast_grep_files() {
     local pattern="$1"
-    if [[ "$HAS_RIPGREP" == "true" ]]; then
+    if [[ "$USE_GIT_GREP" == "true" ]]; then
+        # git grep uses DFA-based regex (no backtracking) - safe for complex patterns
+        # --no-index allows searching files not managed by git
+        tr '\n' '\0' | xargs -0 git grep -l --no-index -E "$pattern" -- 2>/dev/null || true
+    elif [[ "$HAS_RIPGREP" == "true" ]]; then
         tr '\n' '\0' | xargs -0 rg -l --no-messages -e "$pattern" 2>/dev/null || true
     else
         tr '\n' '\0' | xargs -0 grep -lE "$pattern" 2>/dev/null || true
@@ -420,7 +435,9 @@ fast_grep_files() {
 # Note: Uses null-delimited input to handle filenames with spaces (issue #92)
 fast_grep_files_i() {
     local pattern="$1"
-    if [[ "$HAS_RIPGREP" == "true" ]]; then
+    if [[ "$USE_GIT_GREP" == "true" ]]; then
+        tr '\n' '\0' | xargs -0 git grep -li --no-index -E "$pattern" -- 2>/dev/null || true
+    elif [[ "$HAS_RIPGREP" == "true" ]]; then
         tr '\n' '\0' | xargs -0 rg -li --no-messages -e "$pattern" 2>/dev/null || true
     else
         tr '\n' '\0' | xargs -0 grep -liE "$pattern" 2>/dev/null || true
@@ -434,7 +451,9 @@ fast_grep_files_i() {
 # Note: Uses null-delimited input to handle filenames with spaces (issue #92)
 fast_grep_files_fixed() {
     local pattern="$1"
-    if [[ "$HAS_RIPGREP" == "true" ]]; then
+    if [[ "$USE_GIT_GREP" == "true" ]]; then
+        tr '\n' '\0' | xargs -0 git grep -l --no-index -F "$pattern" -- 2>/dev/null || true
+    elif [[ "$HAS_RIPGREP" == "true" ]]; then
         tr '\n' '\0' | xargs -0 rg -l --no-messages --fixed-strings "$pattern" 2>/dev/null || true
     else
         tr '\n' '\0' | xargs -0 grep -lF "$pattern" 2>/dev/null || true
@@ -448,7 +467,9 @@ fast_grep_files_fixed() {
 fast_grep_quiet() {
     local pattern="$1"
     local file="$2"
-    if [[ "$HAS_RIPGREP" == "true" ]]; then
+    if [[ "$USE_GIT_GREP" == "true" ]]; then
+        git grep -q --no-index -E "$pattern" -- "$file" 2>/dev/null
+    elif [[ "$HAS_RIPGREP" == "true" ]]; then
         rg -q "$pattern" "$file" 2>/dev/null
     else
         grep -qE "$pattern" "$file" 2>/dev/null
@@ -765,11 +786,13 @@ check_destructive_patterns() {
     # Phase 3 Optimization: Pre-compile combined regex patterns for batch processing
     # Basic destructive patterns - ONLY flag when targeting user directories ($HOME, ~, /home/)
     # Standalone rimraf/unlinkSync/rmSync removed to reduce false positives (GitHub issue #74)
-    local basic_destructive_regex="rm -rf[[:space:]]+(\\\$HOME|~[^a-zA-Z0-9_/]|/home/)|del /s /q[[:space:]]+(%USERPROFILE%|\\\$HOME)|Remove-Item -Recurse[[:space:]]+(\\\$HOME|~[^a-zA-Z0-9_/])|find[[:space:]]+(\\\$HOME|~[^a-zA-Z0-9_/]|/home/).*-exec rm|find[[:space:]]+(\\\$HOME|~[^a-zA-Z0-9_/]|/home/).*-delete|\\\$HOME/[*]|~/[*]|/home/[^/]+/[*]"
+    # Standalone glob patterns ($HOME/*, ~/*) removed - they match comments/docs (GitHub issue #105)
+    local basic_destructive_regex="rm -rf[[:space:]]+(\\\$HOME|~[^a-zA-Z0-9_/]|/home/)|del /s /q[[:space:]]+(%USERPROFILE%|\\\$HOME)|Remove-Item -Recurse[[:space:]]+(\\\$HOME|~[^a-zA-Z0-9_/])|find[[:space:]]+(\\\$HOME|~[^a-zA-Z0-9_/]|/home/).*-exec rm|find[[:space:]]+(\\\$HOME|~[^a-zA-Z0-9_/]|/home/).*-delete"
 
-    # Conditional patterns for JavaScript/Python (limited span patterns)
-    # Note: exec.{1,30}rm limits span to avoid matching minified code where "exec" and "rm" are far apart
-    local js_py_conditional_regex="if.{1,200}credential.{1,50}(fail|error).{1,50}(rm -|fs\.|rimraf|exec|spawn|child_process)|if.{1,200}token.{1,50}not.{1,20}found.{1,50}(rm -|del |fs\.|rimraf|unlinkSync|rmSync)|if.{1,200}github.{1,50}auth.{1,50}fail.{1,50}(rm -|fs\.|rimraf|exec)|catch.{1,100}(rm -rf|fs\.rm|rimraf|exec.{1,30}rm)|error.{1,100}(rm -|del |fs\.|rimraf).{1,100}(\\\$HOME|~/|home.*(directory|folder|path))"
+    # Shai-Hulud 2.0 wiper patterns - SPECIFIC signatures from actual malware (Koi Security disclosure)
+    # These tight patterns eliminate false positives on TypeScript/minified JS (GitHub issue #105)
+    # while still catching the real wiper code that uses Bun.spawnSync, shred, cipher, etc.
+    local shai_hulud_wiper_regex="Bun\.spawnSync.{1,50}(cmd\.exe|bash).{1,100}(del /F|shred|cipher /W)|shred.{1,30}-[nuvz].{1,50}(\\\$HOME|~/)|cipher[[:space:]]*/W:.{0,30}USERPROFILE|del[[:space:]]*/F[[:space:]]*/Q[[:space:]]*/S.{1,30}USERPROFILE|find.{1,30}\\\$HOME.{1,50}shred|rd[[:space:]]*/S[[:space:]]*/Q.{1,30}USERPROFILE"
 
     # Shell-specific patterns (broader patterns for actual shell scripts)
     local shell_conditional_regex="if.*credential.*(fail|error).*rm|if.*token.*not.*found.*(delete|rm)|if.*github.*auth.*fail.*rm|catch.*rm -rf|error.*delete.*home"
@@ -790,29 +813,13 @@ check_destructive_patterns() {
             done
     fi
 
-    # Batch 2: JavaScript/Python conditional patterns
-    # Use ripgrep if available (much faster on large files), otherwise use two-stage grep filtering
+    # Batch 2: JavaScript/Python Shai-Hulud wiper patterns
+    # Simplified to single-pass using tight signatures (no more two-stage grep or backtracking issues)
     if [[ -s "$TEMP_DIR/js_py_files.txt" ]]; then
-        if [[ "$HAS_RIPGREP" == "true" ]]; then
-            # FAST PATH: ripgrep handles long lines efficiently without catastrophic backtracking
-            fast_grep_files_i "$js_py_conditional_regex" < "$TEMP_DIR/js_py_files.txt" | \
-                while IFS= read -r file; do
-                    echo "$file:Conditional destruction pattern detected (JS/Python context)" >> "$TEMP_DIR/destructive_patterns.txt"
-                done
-        else
-            # FALLBACK: Two-stage grep to avoid catastrophic backtracking on minified files
-            # Stage 1: Fast keyword filter to find candidate files
-            # These keywords must appear for the conditional pattern to match
-            fast_grep_files_i "credential|token|github.*auth" < "$TEMP_DIR/js_py_files.txt" > "$TEMP_DIR/js_py_candidates.txt"
-
-            # Stage 2: Apply complex regex only to candidate files
-            if [[ -s "$TEMP_DIR/js_py_candidates.txt" ]]; then
-                fast_grep_files_i "$js_py_conditional_regex" < "$TEMP_DIR/js_py_candidates.txt" | \
-                    while IFS= read -r file; do
-                        echo "$file:Conditional destruction pattern detected (JS/Python context)" >> "$TEMP_DIR/destructive_patterns.txt"
-                    done
-            fi
-        fi
+        fast_grep_files_i "$shai_hulud_wiper_regex" < "$TEMP_DIR/js_py_files.txt" | \
+            while IFS= read -r file; do
+                echo "$file:Shai-Hulud wiper pattern detected (JS/Python context)" >> "$TEMP_DIR/destructive_patterns.txt"
+            done
     fi
 
     # Batch 3: Shell script conditional patterns
@@ -2106,6 +2113,114 @@ check_network_exfiltration() {
     done < <(tr '\n' '\0' < "$TEMP_DIR/code_files.txt")
 }
 
+# Function: write_log_file
+# Purpose: Write all detected file paths to a log file, grouped by severity
+# Args: $1 = output file path
+# Modifies: Creates/overwrites the specified output file
+# Returns: None
+write_log_file() {
+    local log_file="$1"
+
+    # Start with empty file
+    : > "$log_file"
+
+    # HIGH RISK files
+    echo "# HIGH" >> "$log_file"
+    {
+        # Workflow files (just file paths)
+        [[ -s "$TEMP_DIR/workflow_files.txt" ]] && cat "$TEMP_DIR/workflow_files.txt"
+
+        # Malicious hashes (extract file path before colon)
+        [[ -s "$TEMP_DIR/malicious_hashes.txt" ]] && cut -d: -f1 "$TEMP_DIR/malicious_hashes.txt"
+
+        # Bun attack files
+        [[ -s "$TEMP_DIR/bun_setup_files.txt" ]] && cat "$TEMP_DIR/bun_setup_files.txt"
+        [[ -s "$TEMP_DIR/bun_environment_files.txt" ]] && cat "$TEMP_DIR/bun_environment_files.txt"
+        [[ -s "$TEMP_DIR/new_workflow_files.txt" ]] && cat "$TEMP_DIR/new_workflow_files.txt"
+        [[ -s "$TEMP_DIR/actions_secrets_files.txt" ]] && cat "$TEMP_DIR/actions_secrets_files.txt"
+
+        # Discussion workflows, runners (extract file path before colon)
+        [[ -s "$TEMP_DIR/discussion_workflows.txt" ]] && cut -d: -f1 "$TEMP_DIR/discussion_workflows.txt"
+        [[ -s "$TEMP_DIR/github_runners.txt" ]] && cut -d: -f1 "$TEMP_DIR/github_runners.txt"
+
+        # Destructive patterns (extract file path before colon)
+        [[ -s "$TEMP_DIR/destructive_patterns.txt" ]] && cut -d: -f1 "$TEMP_DIR/destructive_patterns.txt"
+
+        # Preinstall patterns, SHA1HULUD runners
+        [[ -s "$TEMP_DIR/preinstall_bun_patterns.txt" ]] && cat "$TEMP_DIR/preinstall_bun_patterns.txt"
+        [[ -s "$TEMP_DIR/github_sha1hulud_runners.txt" ]] && cat "$TEMP_DIR/github_sha1hulud_runners.txt"
+
+        # Second coming repos
+        [[ -s "$TEMP_DIR/second_coming_repos.txt" ]] && cat "$TEMP_DIR/second_coming_repos.txt"
+
+        # Compromised packages (extract file path before colon)
+        [[ -s "$TEMP_DIR/compromised_found.txt" ]] && cut -d: -f1 "$TEMP_DIR/compromised_found.txt"
+
+        # Trufflehog activity (extract file path before colon)
+        [[ -s "$TEMP_DIR/trufflehog_activity.txt" ]] && cut -d: -f1 "$TEMP_DIR/trufflehog_activity.txt"
+
+        # Shai-Hulud repos
+        [[ -s "$TEMP_DIR/shai_hulud_repos.txt" ]] && cat "$TEMP_DIR/shai_hulud_repos.txt"
+
+        # High-risk crypto patterns (extract from crypto_patterns.txt)
+        if [[ -s "$TEMP_DIR/crypto_patterns.txt" ]]; then
+            grep -E "(HIGH RISK|Known attacker wallet)" "$TEMP_DIR/crypto_patterns.txt" 2>/dev/null | cut -d: -f1 || true
+        fi
+    } | sort -u >> "$log_file"
+
+    # MEDIUM RISK files
+    echo "# MEDIUM" >> "$log_file"
+    {
+        # Suspicious packages (extract file path)
+        [[ -s "$TEMP_DIR/suspicious_found.txt" ]] && cut -d: -f1 "$TEMP_DIR/suspicious_found.txt"
+
+        # Suspicious content (extract file path)
+        [[ -s "$TEMP_DIR/suspicious_content.txt" ]] && cut -d: -f1 "$TEMP_DIR/suspicious_content.txt"
+
+        # Git branches (extract file path)
+        [[ -s "$TEMP_DIR/git_branches.txt" ]] && cut -d: -f1 "$TEMP_DIR/git_branches.txt"
+
+        # Postinstall hooks
+        [[ -s "$TEMP_DIR/postinstall_hooks.txt" ]] && cat "$TEMP_DIR/postinstall_hooks.txt"
+
+        # Integrity issues (extract file path)
+        [[ -s "$TEMP_DIR/integrity_issues.txt" ]] && cut -d: -f1 "$TEMP_DIR/integrity_issues.txt"
+
+        # Typosquatting warnings (extract file path)
+        [[ -s "$TEMP_DIR/typosquatting_warnings.txt" ]] && cut -d: -f1 "$TEMP_DIR/typosquatting_warnings.txt"
+
+        # Network exfiltration (extract file path)
+        [[ -s "$TEMP_DIR/network_exfiltration_warnings.txt" ]] && cut -d: -f1 "$TEMP_DIR/network_exfiltration_warnings.txt"
+
+        # Medium-risk crypto patterns
+        if [[ -s "$TEMP_DIR/crypto_patterns.txt" ]]; then
+            grep -vE "(HIGH RISK|Known attacker wallet|LOW RISK)" "$TEMP_DIR/crypto_patterns.txt" 2>/dev/null | cut -d: -f1 || true
+        fi
+
+        # Namespace warnings (extract file path from "... (found in FILE)")
+        if [[ -s "$TEMP_DIR/namespace_warnings.txt" ]]; then
+            sed -n 's/.*found in \([^)]*\)).*/\1/p' "$TEMP_DIR/namespace_warnings.txt" || true
+        fi
+    } | sort -u >> "$log_file"
+
+    # LOW RISK files
+    echo "# LOW" >> "$log_file"
+    {
+        # Lockfile safe versions (extract file path)
+        [[ -s "$TEMP_DIR/lockfile_safe_versions.txt" ]] && cut -d: -f1 "$TEMP_DIR/lockfile_safe_versions.txt"
+
+        # Low-risk crypto patterns
+        if [[ -s "$TEMP_DIR/crypto_patterns.txt" ]]; then
+            grep "LOW RISK" "$TEMP_DIR/crypto_patterns.txt" 2>/dev/null | cut -d: -f1 || true
+        fi
+
+        # Namespace warnings (has full paths in format: /path/to/file:namespace_info)
+        [[ -s "$TEMP_DIR/namespace_warnings.txt" ]] && cut -d: -f1 "$TEMP_DIR/namespace_warnings.txt"
+    } | sort -u >> "$log_file"
+
+    print_status "$GREEN" "Log saved to: $log_file"
+}
+
 # Function: generate_report
 # Purpose: Generate comprehensive security report with risk stratification and findings
 # Args: $1 = paranoid_mode ("true" or "false" for extended checks)
@@ -2630,6 +2745,7 @@ generate_report() {
 main() {
     local paranoid_mode=false
     local scan_dir=""
+    local save_log=""
 
     # Load compromised packages from external file
     load_compromised_packages
@@ -2657,6 +2773,17 @@ main() {
                 fi
                 PARALLELISM=$2
                 shift
+                ;;
+            --save-log)
+                if [[ -z "$2" || "$2" == -* ]]; then
+                    echo "${RED}error: --save-log requires a file path${NC}" >&2;
+                    usage
+                fi
+                save_log="$2"
+                shift
+                ;;
+            --use-git-grep)
+                USE_GIT_GREP=true
                 ;;
             -*)
                 echo "Unknown option: $1"
@@ -2757,6 +2884,12 @@ main() {
     # Generate report
     print_status "$BLUE" "Generating report..."
     generate_report "$paranoid_mode"
+
+    # Write log file if requested
+    if [[ -n "$save_log" ]]; then
+        write_log_file "$save_log"
+    fi
+
     print_stage_complete "Total scan time"
 
     # Return appropriate exit code based on findings

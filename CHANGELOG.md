@@ -5,6 +5,51 @@ All notable changes to the Shai-Hulud NPM Supply Chain Attack Detector will be d
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.3] - 2025-12-02
+
+### Added
+- **Log File Output**: New `--save-log FILE` argument saves all detected file paths to a structured log file grouped by severity (resolves GitHub issue #104)
+  - Output format: `# HIGH`, `# MEDIUM`, `# LOW` section headers followed by absolute file paths
+  - No truncation - includes ALL findings regardless of display limits
+  - Designed for CI/CD artifacts and programmatic parsing
+
+### Changed
+- **Usage Documentation**: Updated `--help` output and README.md with `--save-log` examples
+
+### Technical Details
+- Added `write_log_file()` function (lines 2098-2204) to generate structured log output
+- Added `--save-log` argument parsing in `main()` (lines 2648-2655)
+- Test suite expanded to 37 tests (34 original + 3 new `--save-log` tests)
+
+## [3.0.2] - 2025-12-02
+
+### Fixed
+- **TypeScript/Minified JS False Positives**: Replaced overly broad conditional patterns (`if.{1,200}credential...`) with tight Shai-Hulud 2.0 wiper signatures based on actual Koi Security malware disclosure (resolves GitHub issue #105)
+- **Comment/Documentation False Positives**: Removed standalone glob patterns (`$HOME/*`, `~/*`) from `basic_destructive_regex` that were matching path examples in comments (e.g., TypeScript ESLint's `describeFilePath.js`)
+- **Catastrophic Backtracking**: Simplified JS/Python destructive pattern matching to single-pass search, eliminating two-stage grep that caused script hangs on minified files (also resolves GitHub issue #99)
+
+### Changed
+- **Destructive Pattern Detection**: Now uses specific Shai-Hulud 2.0 wiper signatures:
+  - `Bun.spawnSync` with `cmd.exe`/`bash` and destructive commands (`del /F`, `shred`, `cipher /W`)
+  - `shred` with secure delete flags targeting `$HOME`
+  - `cipher /W:%USERPROFILE%` (Windows secure wipe)
+  - `del /F /Q /S` + `%USERPROFILE%`
+  - `find $HOME ... shred`
+  - `rd /S /Q` + `%USERPROFILE%`
+- **Basic Destructive Patterns**: Retained command-context patterns (`rm -rf $HOME`, `find $HOME -delete`) while removing context-free glob patterns
+
+### Security
+- **Maintained Detection Efficacy**: All actual Shai-Hulud wiper code patterns still detected
+- **Reduced False Positive Noise**: Projects with TypeScript, minified JS, or path documentation no longer trigger false CRITICAL alerts
+- **Improved User Trust**: Clean scans on legitimate projects like Vue + TypeScript and highcharts
+
+### Technical Details
+- Replaced `js_py_conditional_regex` with `shai_hulud_wiper_regex` at line 773
+- Removed `|\$HOME/[*]|~/[*]|/home/[^/]+/[*]` from `basic_destructive_regex` at line 769
+- Simplified JS/Python pattern matching from two-stage grep to single-pass (lines 794-801)
+- Updated test cases: `destructive-patterns/malicious_fallback.js` and `minified-false-positives/legitimate-destructive.js` to use actual wiper signatures
+- Test suite remains at 34 passing tests
+
 ## [3.0.1] - 2025-12-01
 
 ### Added
