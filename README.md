@@ -39,6 +39,14 @@ Covers multiple npm supply chain attacks from September 2025 and November 2025:
 - **Files**: `setup_bun.js`, `bun_environment.js` (10MB+ obfuscated payload), `actionsSecrets.json` (double Base64 encoded)
 - **Workflow**: `.github/workflows/formatter_*.yml` files using SHA1HULUD runners
 
+### **Shai-Hulud: Golden Path Variant** (December 28, 2025)
+- **Scope**: Continuation of Second Coming attack with renamed files
+- **Attack**: Same fake Bun runtime technique with obfuscated file names
+- **Method**: Uses `bun_installer.js` and `environment_source.js` (renamed from `setup_bun.js` and `bun_environment.js`)
+- **Exfiltration**: Obfuscated JSON files for staging stolen credentials: `3nvir0nm3nt.json`, `cl0vd.json`, `c9nt3nts.json`, `pigS3cr3ts.json`
+- **Packages**: @vietmoney/react-big-calendar (versions 0.26.0-0.26.2)
+- **Repo Description**: "Goldox-T3chs: Only Happy Girl"
+
 ## Quick Start
 
 ```bash
@@ -70,11 +78,12 @@ echo "Exit code: $?"  # 0=clean, 1=high-risk, 2=medium-risk
 ### High Risk Indicators
 - **Malicious workflow files**: `shai-hulud-workflow.yml` files in `.github/workflows/` (September 2025) and `formatter_*.yml` files using SHA1HULUD runners (November 2025)
 - **Known malicious file hashes**: Files matching any of 7 SHA-256 hashes from different Shai-Hulud worm variants (V1-V7), sourced from [Socket.dev's comprehensive attack analysis](https://socket.dev/blog/ongoing-supply-chain-attack-targets-crowdstrike-npm-packages)
-- **November 2025 Bun attack files**: `setup_bun.js` (fake Bun runtime installer) and `bun_environment.js` (10MB+ obfuscated credential harvesting payload)
-- **Compromised package versions**: Specific versions of 979+ packages from multiple attacks (September & November 2025)
+- **November 2025 Bun attack files**: `setup_bun.js`/`bun_installer.js` (fake Bun runtime installer) and `bun_environment.js`/`environment_source.js` (10MB+ obfuscated credential harvesting payload)
+- **Obfuscated exfiltration files**: `3nvir0nm3nt.json`, `cl0vd.json`, `c9nt3nts.json`, `pigS3cr3ts.json` (Golden Path variant - stolen credentials staged for exfiltration)
+- **Compromised package versions**: Specific versions of 1,682+ packages from multiple attacks (September, November & December 2025)
 - **Suspicious postinstall hooks**: Package.json files with postinstall scripts containing curl, wget, eval commands, or fake Bun installation (`"preinstall": "node setup_bun.js"`)
 - **Trufflehog activity**: Files containing trufflehog references, credential scanning patterns, or November 2025 enhanced patterns (automated TruffleHog download and execution)
-- **Shai-Hulud repositories**: Git repositories named "Shai-Hulud" (used for data exfiltration) or with "Sha1-Hulud: The Second Coming" descriptions
+- **Shai-Hulud repositories**: Git repositories named "Shai-Hulud" (used for data exfiltration) or with "Sha1-Hulud: The Second Coming" or "Goldox-T3chs: Only Happy Girl" descriptions
 - **Secrets exfiltration files**: `actionsSecrets.json` files with double Base64 encoded credentials (November 2025)
 - **SHA1HULUD GitHub Actions runners**: GitHub Actions workflows using malicious runners for credential theft
 
@@ -89,7 +98,7 @@ echo "Exit code: $?"  # 0=clean, 1=high-risk, 2=medium-risk
 ### Package Detection Method
 
 The script loads a list of the compromised packages from an external file (`compromised-packages.txt`) which contains:
-- **979+ confirmed compromised package versions** with exact version numbers (571+ from September 2025 + 300+ from November 2025)
+- **1,682+ confirmed compromised package versions** with exact version numbers (571+ from September 2025 + 1,100+ from November/December 2025)
 - **18+ affected namespaces** for broader detection of packages from compromised maintainer accounts
 
 ### Maintaining and Updating the Package List
@@ -119,7 +128,7 @@ Check these security advisories regularly for newly discovered compromised packa
 3. Test the script to ensure detection works
 4. Consider contributing updates back to this repository
 
-**Coverage Note**: Multiple September and November 2025 attacks affected 979+ packages total. Our detection aims to provide **comprehensive coverage** across the Shai-Hulud worm (517+ packages), Chalk/Debug crypto theft (26+ packages), and "Shai-Hulud: The Second Coming" fake Bun runtime attack (300+ packages). Combined with namespace-based detection and enhanced attack pattern recognition, this provides excellent protection against these sophisticated supply chain compromises.
+**Coverage Note**: Multiple September, November, and December 2025 attacks affected 1,682+ packages total. Our detection aims to provide **comprehensive coverage** across the Shai-Hulud worm (517+ packages), Chalk/Debug crypto theft (26+ packages), "Shai-Hulud: The Second Coming" fake Bun runtime attack (1,100+ packages), and the Golden Path variant. Combined with namespace-based detection and enhanced attack pattern recognition, this provides excellent protection against these sophisticated supply chain compromises.
 
 ### Core vs Paranoid Mode
 
@@ -134,6 +143,11 @@ Check these security advisories regularly for newly discovered compromised packa
 - **Important**: Paranoid features are general security tools, not specific to Shai-Hulud
 - May produce more false positives from legitimate code
 - Useful for comprehensive security auditing
+
+**Semver Range Checking (`--check-semver-ranges`)**
+- Checks if package.json semver ranges (^, ~) could resolve to compromised versions
+- Reports LOW risk in both cases (informational warning about latent risk)
+- Useful for identifying latent risk in private npm caches that may still have malicious versions
 
 ## Requirements
 
@@ -357,41 +371,6 @@ You can also run individual test cases manually:
 ./shai-hulud-detector.sh test-cases/destructive-patterns
 ```
 
-### New Detection Capabilities (v2.7.5)
-
-The latest version includes enhanced detection for previously undetected attack techniques from the Koi.ai "Second Coming" analysis:
-
-#### Semver Wildcard Support
-- **Test Case**: `test-cases/semver-wildcards/`
-- **Validates**: Proper parsing of version patterns like "4.x", "1.2.x", "x.x.x"
-- **Background**: Fixes parsing errors that occurred when the script encountered wildcard version patterns
-- **Expected**: Clean execution without syntax errors when processing wildcard patterns
-
-#### Discussion Workflow Detection
-- **Test Case**: `test-cases/discussion-workflows/`
-- **Validates**: Detection of malicious GitHub Actions workflows that trigger on issue/PR discussion events
-- **Background**: Stealth persistence technique where workflows activate when legitimate users comment on issues/PRs
-- **Expected**: CRITICAL risk alerts for workflows with `on: discussion` triggers containing suspicious activity
-
-#### Self-Hosted GitHub Actions Runner Detection
-- **Test Case**: `test-cases/github-actions-runners/`
-- **Validates**: Detection of persistent backdoors installed as self-hosted GitHub Actions runners
-- **Background**: Attackers install runners in `.dev-env/` directories with SHA1HULUD naming patterns for persistent access
-- **Expected**: CRITICAL risk alerts for runner configurations with malicious naming patterns in development directories
-
-#### File Hash Verification Enhancement
-- **Test Case**: `test-cases/hash-verification/`
-- **Validates**: SHA256 hash verification against known malicious file signatures
-- **Background**: Enhanced detection of malicious files by their cryptographic fingerprints rather than just filename patterns
-- **Expected**: Accurate identification of malicious files by hash, with clean files passing verification
-
-#### Destructive Payload Pattern Detection
-- **Test Case**: `test-cases/destructive-patterns/`
-- **Validates**: Detection of destructive fallback commands that activate when credential theft fails
-- **Background**: From Koi.ai report - when credential exfiltration fails, malware deletes files as destructive fallback
-- **Expected**: CRITICAL risk alerts for patterns like `rm -rf $HOME/*`, `fs.rmSync(..., {recursive: true})`, `Remove-Item -Recurse`
-- **Coverage**: Cross-platform destruction patterns (Linux/macOS/Windows)
-
 ### Paranoid Mode Testing
 
 The `--paranoid` flag enables additional security checks beyond Shai-Hulud-specific detection:
@@ -402,55 +381,37 @@ The `--paranoid` flag enables additional security checks beyond Shai-Hulud-speci
 
 **Note**: Paranoid mode may produce more false positives from legitimate code patterns, so review findings carefully.
 
-### Lockfile-Aware Detection (v2.6.0+)
-
-The script now intelligently handles projects with lockfiles to reduce false positives:
-
-- **Lockfile Detection**: Automatically detects package-lock.json, yarn.lock, and pnpm-lock.yaml files
-- **Actual Version Checking**: When semver ranges could match compromised versions, checks the actual installed version from lockfiles
-- **Smart Risk Assessment**:
-  - **HIGH RISK**: Lockfile contains exact compromised version (immediate threat)
-  - **LOW RISK**: Lockfile contains safe version (protected by lockfile, but avoid updates)
-  - **MEDIUM RISK**: No lockfile present (potential update risk)
-
-**Example**: If your package.json has `debug@^4.0.1` (which could match compromised `debug@4.4.2`), but your lockfile pins to `debug@4.0.1`, you'll see a LOW RISK message explaining that your current installation is safe.
-
-This feature addresses Issue #42 and eliminates confusion for users with older projects that have established lockfiles.
-
 ## How it Works
 
-The script performs these comprehensive checks:
+The script performs these checks:
 
-1. **Package Database Loading**: Loads the complete list of 1,677+ compromised packages from `compromised-packages.txt` (September & November 2025, plus 953 packages from Koi.ai "Second Coming" analysis)
+1. **Package Database Loading**: Loads 1,682+ compromised packages from `compromised-packages.txt` into O(1) lookup maps
 2. **Workflow Detection**: Searches for `shai-hulud-workflow.yml` files (September 2025) and `formatter_*.yml` files with SHA1HULUD runners (November 2025)
-3. **Hash Verification**: Calculates SHA-256 hashes of JavaScript/JSON files against 7 known malicious bundle.js variants representing the complete evolution of the Shai-Hulud worm (V1-V7)
-4. **November 2025 Bun Attack Detection**: Identifies `setup_bun.js` (fake Bun installer) and `bun_environment.js` (obfuscated payload) files with enhanced SHA256 hash verification
-5. **Package Analysis**: Parses `package.json` files for specific compromised versions, affected namespaces, and fake Bun preinstall hooks
-6. **Postinstall Hook Detection**: Identifies suspicious postinstall scripts including fake Bun installation patterns (`"preinstall": "node setup_bun.js"`)
-7. **Content Scanning**: Greps for suspicious URLs, webhook endpoints, and malicious patterns
-8. **Cryptocurrency Theft Detection**: Identifies wallet address replacement patterns, XMLHttpRequest hijacking, and known crypto theft functions from the September 8 attack
-9. **Enhanced Trufflehog Activity Detection**: Looks for credential scanning tools, secret harvesting, and November 2025 automated TruffleHog download patterns
-10. **Git Analysis**: Checks for suspicious branch names and repository names
-11. **Repository Detection**: Identifies "Shai-Hulud" repositories and "Sha1-Hulud: The Second Coming" repository descriptions
-12. **Secrets Exfiltration Detection**: Identifies `actionsSecrets.json` files with double Base64 encoded credentials
-13. **GitHub Actions Runner Detection**: Identifies malicious SHA1HULUD runners in GitHub Actions workflows
-14. **Discussion Workflow Detection**: Identifies malicious GitHub Actions workflows that trigger on discussion events (a stealth persistence technique where workflows activate when issues/PRs receive comments)
-15. **Self-Hosted Runner Detection**: Detects persistent backdoor installations via self-hosted GitHub Actions runners stored in `.dev-env/` directories with SHA1HULUD naming patterns
-16. **Destructive Payload Detection**: Identifies destructive fallback patterns that activate when credential theft fails, including `rm -rf $HOME/*`, `fs.rmSync(..., {recursive: true})`, `Remove-Item -Recurse`, and cross-platform destruction commands
-17. **Package Integrity Checking**: Analyzes package-lock.json and yarn.lock files for compromised packages and suspicious modifications
+3. **Hash Verification**: Calculates SHA-256 hashes against 7 known malicious bundle.js variants (V1-V7)
+4. **Package Analysis**: Parses `package.json` files for compromised versions and affected namespaces
+5. **Semver Range Checking** (opt-in with `--check-semver-ranges`): Checks if version ranges could resolve to compromised versions
+6. **Postinstall Hook Detection**: Identifies suspicious postinstall/preinstall scripts containing curl, wget, eval, or fake Bun patterns
+7. **Content Scanning**: Searches for suspicious URLs, webhook endpoints, and malicious patterns
+8. **Cryptocurrency Theft Detection**: Identifies wallet replacement patterns, XMLHttpRequest hijacking, and crypto theft functions
+9. **Trufflehog Activity Detection**: Looks for credential scanning tools and secret harvesting patterns
+10. **Git Analysis**: Checks for suspicious branch names ("shai-hulud")
+11. **Repository Detection**: Identifies "Shai-Hulud", "Second Coming", and "Goldox-T3chs" repository patterns
+12. **November 2025 Bun Attack Detection**: Identifies `setup_bun.js`/`bun_installer.js` and `bun_environment.js`/`environment_source.js` attack files
+13. **GitHub Actions Runner Detection**: Identifies malicious SHA1HULUD runners
+14. **Discussion Workflow Detection**: Identifies workflows that trigger on discussion events (stealth persistence)
+15. **Destructive Payload Detection**: Identifies destructive fallback patterns (`rm -rf`, `fs.rmSync`, etc.)
+16. **Lockfile Integrity Checking**: Analyzes package-lock.json, yarn.lock, and pnpm-lock.yaml for compromised packages
+17. **Typosquatting Detection** (paranoid mode): Identifies packages with names similar to popular packages
+18. **Network Exfiltration Detection** (paranoid mode): Detects suspicious domains and hardcoded IPs
+19. **Obfuscated Exfiltration Detection**: Identifies Golden Path variant staging files (`3nvir0nm3nt.json`, `cl0vd.json`, etc.)
 
 ## Limitations
 
-- **Hash Detection**: Only detects files with exact matches to the 7 known malicious bundle.js hashes
-- **Package Versions**: Detects specific compromised versions and namespace warnings, but new compromised versions may not be detected
-- **False Positives**: Legitimate use of webhook.site, Trufflehog for security, or postinstall hooks will trigger alerts
-- **Worm Evolution**: The self-replicating nature means new variants may emerge with different signatures
-- **Coverage**: Covers known compromised packages from major September 2025 and November 2025 attacks
-- **Package Integrity**: Relies on lockfile analysis to detect compromised packages, but sophisticated attacks may evade detection
-
-## Contributing
-
-If you discover additional IoCs or compromised packages related to the Shai-Hulud attack, please update the arrays in the script and test thoroughly.
+- **Hash Detection**: Only detects files with exact matches to the 7 known malicious hashes
+- **Package Versions**: Detects specific compromised versions; new variants may not be detected until the package list is updated
+- **False Positives**: Legitimate use of webhook.site, Trufflehog, or postinstall hooks may trigger alerts
+- **Worm Evolution**: New variants may emerge with different signatures
+- **Semver Ranges**: The `--check-semver-ranges` flag is informational only; compromised versions are largely unpublished from npm
 
 ## Security Note
 
@@ -469,18 +430,12 @@ Always verify findings manually and take appropriate remediation steps.
 - [Aikido: NPM debug and chalk packages compromised](https://www.aikido.dev/blog/npm-debug-and-chalk-packages-compromised)
 - [Semgrep Security Advisory: NPM packages using secret scanning tools to steal credentials](https://semgrep.dev/blog/2025/security-advisory-npm-packages-using-secret-scanning-tools-to-steal-credentials/)
 - [Aikido: S1ngularity-nx attackers strike again](https://www.aikido.dev/blog/s1ngularity-nx-attackers-strike-again)
+- [Aikido: Shai-Hulud strikes again - The Golden Path](https://www.aikido.dev/blog/shai-hulud-strikes-again---the-golden-path)
 
 ### Additional Resources
 - [Socket: Ongoing supply chain attack targets CrowdStrike npm packages](https://socket.dev/blog/ongoing-supply-chain-attack-targets-crowdstrike-npm-packages)
 - [Ox Security: NPM 2.0 hack: 40+ npm packages hit in major supply chain attack](https://www.ox.security/blog/npm-2-0-hack-40-npm-packages-hit-in-major-supply-chain-attack/)
 - [Phoenix Security: NPM tinycolor compromise](https://phoenix.security/npm-tinycolor-compromise/)
-
-### Attack Details
-- **Initial Discovery**: September 15, 2025
-- **Scale**: 571+ packages compromised across multiple attack campaigns
-- **Attack Type**: Self-replicating worm using postinstall hooks
-- **Malicious Endpoint**: `https://webhook.site/bb8ca5f6-4175-45d2-b042-fc9ebb8170b7`
-- **Exfiltration Method**: GitHub repositories named "Shai-Hulud"
 
 ## Contributing
 
@@ -490,31 +445,25 @@ We welcome contributions to improve any of the code, documentation, tests and pa
 
 #### Adding New Compromised Packages
 
-1. **Fork the repository**
+1. **Fork the repository** on GitHub, then clone your fork:
    ```bash
-   git clone https://github.com/Cobenian/shai-hulud-detect.git
-   cd shai-hulud-detector
+   git clone https://github.com/YOUR_USERNAME/shai-hulud-detect.git
+   cd shai-hulud-detect
    ```
 
 2. **Update the package list**
    - Add new packages to `compromised-packages.txt` in the format `package_name:version`
    - Include a source/reference for where you found the compromised package
-   - Group packages by namespace for organization
 
 3. **Test your changes**
    ```bash
-   # Run the full test suite to ensure nothing breaks
    ./run-tests.sh
-
-   # All 32 tests should pass. If any fail, review the expected results
-   # in run-tests.sh and verify your changes don't cause regressions.
+   # All 37 tests should pass
    ```
 
 4. **Submit a Pull Request**
-   - Create a descriptive PR title (e.g., "Add @example/package compromised versions")
-   - Include details about the source of the information
-   - Reference any security advisories or reports
-   - Explain any version patterns or attack details
+   - Push to your fork and open a PR against the upstream repository
+   - Include the source of the information (security advisory, blog post, etc.)
 
 #### Other Contributions
 
